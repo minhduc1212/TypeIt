@@ -120,9 +120,24 @@
 
     <!-- Center Area (Typing Zone) -->
     <div class="typing-zone" @click="focusTyping">
+      <!-- Hidden textarea to capture text input including Vietnamese IME -->
+      <textarea
+        ref="hiddenInput"
+        class="hidden-typing-input"
+        @input="handleInput"
+        @keydown="handleSpecialKeys"
+        @blur="isFocused = false"
+        @focus="isFocused = true"
+        v-model="inputValue"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+      ></textarea>
+
       <div class="typing-content-wrapper" ref="scrollContainer">
         <!-- We prompt focus if the user loses it -->
-        <div class="focus-overlay" v-if="!isFocused && !showResults" @click="isFocused = true">
+        <div class="focus-overlay" v-if="!isFocused && !showResults" @click="focusTyping">
           <div class="focus-prompt">Click here to resume typing</div>
         </div>
 
@@ -211,6 +226,8 @@ const selectedFont = ref('Lora')
 const fontSize = ref(22)
 const lineHeight = ref(1.9)
 const scrollContainer = ref(null)
+const hiddenInput = ref(null)
+const inputValue = ref('')
 const enableSound = ref(localStorage.getItem('typeit_sound') !== 'false')
 const enableErrorSound = ref(localStorage.getItem('typeit_error_sound') !== 'false')
 const selectedSoundProfile = ref(localStorage.getItem('typeit_sound_profile') || 'mechanical')
@@ -584,6 +601,7 @@ const resetPracticeState = () => {
   errorCount.value = 0
   showResults.value = false
   isFocused.value = true
+  inputValue.value = ''
   
   // Reset character statuses
   chars.value.forEach(c => c.status = 'untyped')
@@ -641,67 +659,46 @@ const progress = computed(() => {
   return Math.round((currentIndex.value / chars.value.length) * 100)
 })
 
-// Auto-scrolling to keep current character centered
+// Viewport-bounds natural auto-scrolling (no center-jumping on every keystroke)
 const autoScroll = () => {
   const activeSpan = document.getElementById(`char-${currentIndex.value}`)
   const container = scrollContainer.value
   if (activeSpan && container) {
-    const relativeTop = activeSpan.offsetTop
-    const targetScrollTop = relativeTop - (container.clientHeight / 2)
-    container.scrollTo({
-      top: targetScrollTop,
-      behavior: 'smooth'
-    })
+    const spanTop = activeSpan.offsetTop
+    const spanHeight = activeSpan.clientHeight
+    const containerHeight = container.clientHeight
+    const containerScrollTop = container.scrollTop
+
+    // If character is below the visible area of the container
+    if (spanTop + spanHeight - containerScrollTop > containerHeight - 40) {
+      container.scrollTo({
+        top: spanTop - containerHeight + 80,
+        behavior: 'smooth'
+      })
+    }
+    // If character is above the visible area of the container
+    else if (spanTop - containerScrollTop < 40) {
+      container.scrollTo({
+        top: Math.max(0, spanTop - 40),
+        behavior: 'smooth'
+      })
+    }
   }
 }
 
 const focusTyping = () => {
   isFocused.value = true
+  nextTick(() => {
+    if (hiddenInput.value) {
+      hiddenInput.value.focus()
+      hiddenInput.value.setSelectionRange(inputValue.value.length, inputValue.value.length)
+    }
+  })
 }
 
-// Window Keyboard Event Listener
-const handleKeyDown = (e) => {
-  // Don't listen to keypresses if showing results or settings, or if focus is on an input
+// Captures typing inputs including Vietnamese diacritics / IME composition
+const handleInput = (e) => {
   if (showResults.value) return
-  
-  if (
-    document.activeElement && 
-    (document.activeElement.tagName === 'INPUT' || 
-     document.activeElement.tagName === 'TEXTAREA' || 
-     document.activeElement.tagName === 'SELECT')
-  ) {
-    return
-  }
-  
-  // Make sure we are focused on the typing zone
-  if (!isFocused.value) {
-    return
-  }
-
-  // Handle meta keys, shortcuts, and arrows
-  if (e.ctrlKey || e.altKey || e.metaKey) return
-  
-  // Backspace
-  if (e.key === 'Backspace') {
-    e.preventDefault()
-    if (currentIndex.value > 0) {
-      currentIndex.value--
-      chars.value[currentIndex.value].status = 'untyped'
-      nextTick(autoScroll)
-      playClickSound(true)
-    }
-    return
-  }
-
-  // Prevent browser scroll or other defaults for space and enter
-  if (e.key === ' ' || e.key === 'Enter') {
-    e.preventDefault()
-  }
-
-  // Filter out non-character keys (except Space and Enter)
-  if (e.key.length > 1 && e.key !== 'Enter') {
-    return
-  }
 
   // Start timer on first keystroke
   if (startTime.value === null) {
@@ -711,31 +708,64 @@ const handleKeyDown = (e) => {
     }, 1000)
   }
 
-  const targetChar = chars.value[currentIndex.value].char
-  const typedKey = e.key === 'Enter' ? '\n' : e.key
+  const typedText = inputValue.value
+  const typedLength = typedText.length
+  const newIndex = Math.min(typedLength, chars.value.length)
   
-  // Increment total keypresses
-  typedCharCount.value++
+  const isAddition = newIndex > currentIndex.value
+  const isDeletion = newIndex < currentIndex.value
 
-  // Match comparison
-  if (typedKey === targetChar) {
-    chars.value[currentIndex.value].status = 'correct'
-    playClickSound(true)
-  } else {
-    chars.value[currentIndex.value].status = 'incorrect'
-    errorCount.value++
-    playClickSound(false)
+  // Compare characters dynamically to allow IME replacements (like Telex "a" + "a" -> "â")
+  for (let i = 0; i < chars.value.length; i++) {
+    if (i < newIndex) {
+      const targetChar = chars.value[i].char
+      const typedChar = typedText[i]
+      
+      if (typedChar === targetChar) {
+        chars.value[i].status = 'correct'
+      } else {
+        chars.value[i].status = 'incorrect'
+      }
+    } else {
+      chars.value[i].status = 'untyped'
+    }
   }
 
-  // Move cursor forward
-  currentIndex.value++
-  
-  // Auto-scroll to center active line
+  // Handle sounds and stats
+  if (isAddition) {
+    typedCharCount.value++
+    const newlyTypedChar = typedText[newIndex - 1]
+    const targetChar = chars.value[newIndex - 1].char
+    
+    if (newlyTypedChar === targetChar) {
+      playClickSound(true)
+    } else {
+      errorCount.value++
+      playClickSound(false)
+    }
+  } else if (isDeletion) {
+    playClickSound(true) // Play click sound for backspace
+  } else {
+    // Character at index was replaced during IME composition update
+    const replacedIdx = newIndex - 1
+    if (replacedIdx >= 0) {
+      const targetChar = chars.value[replacedIdx].char
+      const typedChar = typedText[replacedIdx]
+      
+      if (typedChar === targetChar) {
+        playClickSound(true)
+      } else {
+        errorCount.value++
+        playClickSound(false)
+      }
+    }
+  }
+
+  currentIndex.value = newIndex
   nextTick(autoScroll)
 
   // Check end of document
   if (currentIndex.value >= chars.value.length) {
-    // Complete practice!
     if (timerInterval.value) {
       clearInterval(timerInterval.value)
     }
@@ -743,17 +773,31 @@ const handleKeyDown = (e) => {
   }
 }
 
+// Disables arrow keys and other commands that shift focus inside the input
+const handleSpecialKeys = (e) => {
+  if (
+    e.key === 'ArrowLeft' || 
+    e.key === 'ArrowRight' || 
+    e.key === 'ArrowUp' || 
+    e.key === 'ArrowDown' || 
+    e.key === 'Home' || 
+    e.key === 'End' || 
+    e.key === 'PageUp' || 
+    e.key === 'PageDown'
+  ) {
+    e.preventDefault()
+  }
+}
+
 // Add/Remove event listeners
 onMounted(() => {
   fetchDocument()
-  window.addEventListener('keydown', handleKeyDown)
   
   // Listen for click away to blur typing focus
   window.addEventListener('click', handleGlobalClick)
 })
 
 const handleGlobalClick = (e) => {
-  // If clicked outside typing zone and settings panel, remove typing focus
   const zone = document.querySelector('.typing-zone')
   const settings = document.querySelector('.settings-dropdown')
   const header = document.querySelector('.practice-header')
@@ -769,7 +813,6 @@ const cleanup = () => {
   if (timerInterval.value) {
     clearInterval(timerInterval.value)
   }
-  window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('click', handleGlobalClick)
 }
 
@@ -1065,22 +1108,44 @@ watch(() => props.docId, () => {
   background-color: #334155;
 }
 
+/* Hidden Input for Capturing Keyboard/IME Events */
+.hidden-typing-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: -999;
+}
+
 /* Typing Zone */
 .typing-zone {
   position: relative;
-  background-color: #FFFFFF;
-  border: 1px solid var(--ui-border);
-  border-radius: 8px;
-  padding: 30px;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 10px 0;
   outline: none;
 }
 
 .typing-content-wrapper {
   max-height: 420px;
-  overflow-y: auto;
+  overflow-y: scroll;
   position: relative;
   scroll-padding: 180px 0;
-  padding-right: 10px;
+  padding-right: 0px;
+  scrollbar-width: none; /* Hide scrollbar in Firefox */
+  -ms-overflow-style: none; /* Hide scrollbar in IE/Edge */
+}
+
+.typing-content-wrapper::-webkit-scrollbar {
+  display: none; /* Hide scrollbar in Chrome/Safari/Webkit */
 }
 
 .focus-overlay {
