@@ -233,8 +233,10 @@ const inputValue = ref('')
 const scrollTranslateY = ref(0)
 const lastLineOffsetTop = ref(-1)
 const lineH = computed(() => fontSize.value * lineHeight.value)
+const visibleLines = ref(10)
+const activeSlot = 3
 const wrapperStyle = computed(() => ({
-  height: (4 * lineH.value) + 'px',
+  height: (visibleLines.value * lineH.value) + 'px',
   overflow: 'hidden',
   position: 'relative'
 }))
@@ -247,7 +249,17 @@ const textFlowStyle = computed(() => ({
   position: 'relative'
 }))
 
+const updateVisibleLines = () => {
+  if (!scrollContainer.value) return
+  const rect = scrollContainer.value.getBoundingClientRect()
+  const marginFromBottom = 50
+  const availableHeight = window.innerHeight - rect.top - marginFromBottom
+  const lines = Math.floor(availableHeight / lineH.value)
+  visibleLines.value = Math.max(6, Math.min(25, lines))
+}
+
 watch([fontSize, lineHeight], () => {
+  updateVisibleLines()
   nextTick(() => {
     autoScroll()
   })
@@ -633,10 +645,13 @@ const resetPracticeState = () => {
   chars.value.forEach(c => c.status = 'untyped')
   
   nextTick(() => {
-    autoScroll()
-    if (scrollContainer.value) {
-      scrollContainer.value.scrollTop = 0
-    }
+    updateVisibleLines()
+    nextTick(() => {
+      autoScroll()
+      if (scrollContainer.value) {
+        scrollContainer.value.scrollTop = 0
+      }
+    })
   })
 }
 
@@ -694,8 +709,8 @@ const autoScroll = () => {
   const spanTop = activeSpan.offsetTop
 
   // Keep the active line centered vertically.
-  // We cap translation at 0 so we don't translate down at the start (Line 1 & 2).
-  scrollTranslateY.value = Math.min(0, lineH.value - spanTop)
+  // We cap translation at 0 so we don't translate down at the start.
+  scrollTranslateY.value = Math.min(0, (activeSlot * lineH.value) - spanTop)
   lastLineOffsetTop.value = spanTop
 }
 
@@ -881,11 +896,19 @@ const handleGlobalKeydown = (e) => {
 }
 
 // Add/Remove event listeners
+const handleResize = () => {
+  updateVisibleLines()
+  nextTick(() => {
+    autoScroll()
+  })
+}
+
 onMounted(() => {
   fetchDocument()
   
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('resize', handleResize)
 })
 
 const handleGlobalClick = (e) => {
@@ -906,6 +929,7 @@ const cleanup = () => {
   }
   window.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('resize', handleResize)
 }
 
 onUnmounted(() => {
@@ -1227,7 +1251,6 @@ watch(() => props.docId, () => {
 }
 
 .typing-content-wrapper {
-  max-height: 420px;
   overflow-y: scroll;
   position: relative;
   scroll-padding: 180px 0;
