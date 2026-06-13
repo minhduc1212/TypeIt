@@ -135,14 +135,16 @@
         spellcheck="false"
       ></textarea>
 
-      <div class="typing-content-wrapper" ref="scrollContainer">
+      <div class="typing-content-wrapper" 
+           :style="wrapperStyle"
+           ref="scrollContainer">
         <!-- We prompt focus if the user loses it -->
         <div class="focus-overlay" v-if="!isFocused && !showResults" @click="focusTyping">
           <div class="focus-prompt">Click here to resume typing</div>
         </div>
 
         <div class="typing-text-flow" 
-             :style="{ fontFamily: selectedFont, fontSize: fontSize + 'px', lineHeight: lineHeight }"
+             :style="textFlowStyle"
              ref="textFlow">
           <span v-for="(charObj, idx) in chars" 
                 :key="idx"
@@ -228,6 +230,28 @@ const lineHeight = ref(1.9)
 const scrollContainer = ref(null)
 const hiddenInput = ref(null)
 const inputValue = ref('')
+const scrollTranslateY = ref(0)
+const lastLineOffsetTop = ref(-1)
+const lineH = computed(() => fontSize.value * lineHeight.value)
+const wrapperStyle = computed(() => ({
+  height: (4 * lineH.value) + 'px',
+  overflow: 'hidden',
+  position: 'relative'
+}))
+const textFlowStyle = computed(() => ({
+  fontFamily: selectedFont.value,
+  fontSize: fontSize.value + 'px',
+  lineHeight: lineHeight.value,
+  transform: `translateY(${scrollTranslateY.value}px)`,
+  transition: 'transform 0.25s ease-out',
+  position: 'relative'
+}))
+
+watch([fontSize, lineHeight], () => {
+  nextTick(() => {
+    autoScroll()
+  })
+})
 const enableSound = ref(localStorage.getItem('typeit_sound') !== 'false')
 const enableErrorSound = ref(localStorage.getItem('typeit_error_sound') !== 'false')
 const selectedSoundProfile = ref(localStorage.getItem('typeit_sound_profile') || 'mechanical')
@@ -581,7 +605,7 @@ const fetchDocument = async () => {
       })
     } else {
       console.error('Document not found')
-      emit('back')
+emit('back')
     }
   } catch (err) {
     console.error('Error loading document:', err)
@@ -590,7 +614,6 @@ const fetchDocument = async () => {
 }
 
 const resetPracticeState = () => {
-  // Clear timer
   if (timerInterval.value) {
     clearInterval(timerInterval.value)
     timerInterval.value = null
@@ -604,12 +627,13 @@ const resetPracticeState = () => {
   showResults.value = false
   isFocused.value = true
   inputValue.value = ''
+  scrollTranslateY.value = 0
+  lastLineOffsetTop.value = -1
   
-  // Reset character statuses
   chars.value.forEach(c => c.status = 'untyped')
   
-  // Reset scroll
   nextTick(() => {
+    autoScroll()
     if (scrollContainer.value) {
       scrollContainer.value.scrollTop = 0
     }
@@ -661,31 +685,18 @@ const progress = computed(() => {
   return Math.round((currentIndex.value / chars.value.length) * 100)
 })
 
-// Viewport-bounds natural auto-scrolling (no center-jumping on every keystroke)
+// Keep the active typing line vertically centered in the container.
 const autoScroll = () => {
-  const activeSpan = document.getElementById(`char-${currentIndex.value}`)
+  const activeSpan = window.document.getElementById(`char-${currentIndex.value}`)
   const container = scrollContainer.value
-  if (activeSpan && container) {
-    const spanTop = activeSpan.offsetTop
-    const spanHeight = activeSpan.clientHeight
-    const containerHeight = container.clientHeight
-    const containerScrollTop = container.scrollTop
+  if (!activeSpan || !container) return
 
-    // If character is below the visible area of the container
-    if (spanTop + spanHeight - containerScrollTop > containerHeight - 40) {
-      container.scrollTo({
-        top: spanTop - containerHeight + 80,
-        behavior: 'smooth'
-      })
-    }
-    // If character is above the visible area of the container
-    else if (spanTop - containerScrollTop < 40) {
-      container.scrollTo({
-        top: Math.max(0, spanTop - 40),
-        behavior: 'smooth'
-      })
-    }
-  }
+  const spanTop = activeSpan.offsetTop
+
+  // Keep the active line centered vertically.
+  // We cap translation at 0 so we don't translate down at the start (Line 1 & 2).
+  scrollTranslateY.value = Math.min(0, lineH.value - spanTop)
+  lastLineOffsetTop.value = spanTop
 }
 
 const focusTyping = () => {
@@ -771,7 +782,20 @@ const processInputState = (typedText, newIndex, isAdditionOrUpdate) => {
     playClickSound(true) // Play click sound for backspace
   }
 
-  currentIndex.value = newIndex
+  // Determine if the last character is currently under composition.
+  // In Vietnamese, a character is under composition if it matches the target
+  // character's base form but is not yet an exact match.
+  let lastCharNeedsComposition = false
+  if (newIndex > 0) {
+    const lastIdx = newIndex - 1
+    const targetChar = chars.value[lastIdx].char
+    const typedChar = typedText[lastIdx]
+    if (typedChar !== targetChar && getBaseChar(typedChar) === getBaseChar(targetChar)) {
+      lastCharNeedsComposition = true
+    }
+  }
+
+  currentIndex.value = lastCharNeedsComposition ? newIndex - 1 : newIndex
   nextTick(autoScroll)
 
   // Check end of document
@@ -840,18 +864,34 @@ const handleSpecialKeys = (e) => {
   }
 }
 
+const handleGlobalKeydown = (e) => {
+  if (showResults.value || showSettings.value) return
+
+  const activeEl = window.document.activeElement
+  if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+    if (activeEl === hiddenInput.value) return
+    return
+  }
+
+  if (e.ctrlKey || e.altKey || e.metaKey) return
+
+  if (hiddenInput.value) {
+    hiddenInput.value.focus()
+  }
+}
+
 // Add/Remove event listeners
 onMounted(() => {
   fetchDocument()
   
-  // Listen for click away to blur typing focus
   window.addEventListener('click', handleGlobalClick)
+  window.addEventListener('keydown', handleGlobalKeydown)
 })
 
 const handleGlobalClick = (e) => {
-  const zone = document.querySelector('.typing-zone')
-  const settings = document.querySelector('.settings-dropdown')
-  const header = document.querySelector('.practice-header')
+  const zone = window.document.querySelector('.typing-zone')
+  const settings = window.document.querySelector('.settings-dropdown')
+  const header = window.document.querySelector('.practice-header')
   
   if (zone && !zone.contains(e.target) && 
       (!settings || !settings.contains(e.target)) && 
@@ -865,6 +905,7 @@ const cleanup = () => {
     clearInterval(timerInterval.value)
   }
   window.removeEventListener('click', handleGlobalClick)
+  window.removeEventListener('keydown', handleGlobalKeydown)
 }
 
 onUnmounted(() => {
