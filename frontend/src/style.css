@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@300;400;500;600;700&family=Literata:ital,wght@0,400;0,500;0,600;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Roboto+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* Color Palette (Neutral & Gentle) */
+  --bg-color: #EEF2F5; /* Soft Cool Grey/Blue-tinted off-white */
+  --text-upcoming: #94A3B8; /* Medium Grey */
+  --text-correct: #1E293B; /* Dark Slate/Charcoal */
+  --cursor-highlight: rgba(253, 240, 138, 0.85); /* Muted yellow block behind current letter */
+  --error-bg: #FCA5A5; /* Soft Red background */
+  --error-text: #991B1B; /* Dark Red text for readability on error-bg */
+  --ui-muted: #94A3B8; /* Faded grey for icons and minor text */
+  --ui-primary: #475569; /* Slate grey for buttons/nav */
+  --ui-border: #CBD5E1; /* Muted border color */
+  --card-bg: #FFFFFF; /* Pure white only for high-contrast card panels if needed, otherwise we stay flat */
+  
+  /* Fonts */
+  --font-typing: 'Lora', Georgia, serif;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Roboto Mono', monospace;
+
+  /* App layouts */
+  --max-content-width: 850px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-color);
+  color: var(--text-correct);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  outline: none;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ui-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ui-primary);
+}
+
+/* SVG Icon general styling */
+.icon-svg {
+  width: 1.1em;
+  height: 1.1em;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  display: inline-block;
+  vertical-align: -0.15em;
+  transition: transform 0.15s, stroke 0.15s, fill 0.15s;
+}
+
