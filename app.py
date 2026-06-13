@@ -8,6 +8,88 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
+from supabase import create_client, Client
+
+# Supabase Client SDK setup
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+supabase_client: Client = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("Supabase Client initialized successfully.")
+    except Exception as e:
+        print(f"Failed to initialize Supabase Client: {e}")
+else:
+    print("Supabase URL or Key not configured. Running in Local Storage mode.")
+
+def db_get_all_documents():
+    if not supabase_client:
+        return []
+    try:
+        response = supabase_client.table("uploaded_documents") \
+            .select("id, title, author, type, char_count, word_count, bookmarked") \
+            .order("created_at", desc=True) \
+            .execute()
+        return response.data
+    except Exception as e:
+        print(f"Error fetching documents from Supabase: {e}")
+        return []
+
+def db_get_document(doc_id: str):
+    if not supabase_client:
+        return None
+    try:
+        response = supabase_client.table("uploaded_documents") \
+            .select("*") \
+            .eq("id", doc_id) \
+            .execute()
+        return response.data[0] if response.data else None
+    except Exception as e:
+        print(f"Error fetching document {doc_id} from Supabase: {e}")
+        return None
+
+def db_save_document(doc: dict) -> bool:
+    if not supabase_client:
+        return False
+    try:
+        supabase_client.table("uploaded_documents").insert(doc).execute()
+        return True
+    except Exception as e:
+        print(f"Error saving document to Supabase: {e}")
+        return False
+
+def db_delete_document(doc_id: str):
+    if not supabase_client:
+        return None
+    try:
+        response = supabase_client.table("uploaded_documents") \
+            .delete() \
+            .eq("id", doc_id) \
+            .execute()
+        return response.data[0] if response.data else None
+    except Exception as e:
+        print(f"Error deleting document from Supabase: {e}")
+        return None
+
+def db_toggle_bookmark(doc_id: str):
+    if not supabase_client:
+        return None
+    try:
+        doc = db_get_document(doc_id)
+        if not doc:
+            return None
+        new_state = not doc.get("bookmarked", False)
+        response = supabase_client.table("uploaded_documents") \
+            .update({"bookmarked": new_state}) \
+            .eq("id", doc_id) \
+            .execute()
+        return new_state if response.data else None
+    except Exception as e:
+        print(f"Error toggling bookmark in Supabase: {e}")
+        return None
 
 app = FastAPI(title="TypeIt - Literary Typing Practice Backend")
 
@@ -149,7 +231,6 @@ def get_doc_stats(content: str) -> tuple[int, int]:
 
 @app.get("/api/documents")
 def get_documents():
-    uploaded = load_uploaded_docs()
     all_docs = []
     
     # Preloaded docs first
@@ -166,18 +247,24 @@ def get_documents():
         })
         
     # Uploaded docs next
-    for doc in uploaded:
-        char_cnt, word_cnt = get_doc_stats(doc["content"])
-        all_docs.append({
-            "id": doc["id"],
-            "title": doc["title"],
-            "author": doc.get("author", "Uploaded Document"),
-            "type": "uploaded",
-            "char_count": char_cnt,
-            "word_count": word_cnt,
-            "bookmarked": doc.get("bookmarked", False)
-        })
-        
+    if supabase_client:
+        uploaded = db_get_all_documents()
+    else:
+        uploaded_raw = load_uploaded_docs()
+        uploaded = []
+        for doc in uploaded_raw:
+            char_cnt, word_cnt = get_doc_stats(doc["content"])
+            uploaded.append({
+                "id": doc["id"],
+                "title": doc["title"],
+                "author": doc.get("author", "Uploaded Document"),
+                "type": "uploaded",
+                "char_count": char_cnt,
+                "word_count": word_cnt,
+                "bookmarked": doc.get("bookmarked", False)
+            })
+            
+    all_docs.extend(uploaded)
     return all_docs
 
 @app.get("/api/documents/{doc_id}")
@@ -193,15 +280,20 @@ def get_document(doc_id: str):
             }
             
     # Search in uploaded
-    uploaded = load_uploaded_docs()
-    for doc in uploaded:
-        if doc["id"] == doc_id:
-            char_cnt, word_cnt = get_doc_stats(doc["content"])
-            return {
-                **doc,
-                "char_count": char_cnt,
-                "word_count": word_cnt
-            }
+    if supabase_client:
+        doc = db_get_document(doc_id)
+        if doc:
+            return doc
+    else:
+        uploaded = load_uploaded_docs()
+        for doc in uploaded:
+            if doc["id"] == doc_id:
+                char_cnt, word_cnt = get_doc_stats(doc["content"])
+                return {
+                    **doc,
+                    "char_count": char_cnt,
+                    "word_count": word_cnt
+                }
             
     raise HTTPException(status_code=404, detail="Document not found")
 
@@ -214,12 +306,17 @@ def toggle_bookmark(doc_id: str):
             return {"id": doc_id, "bookmarked": doc["bookmarked"]}
             
     # If uploaded doc
-    uploaded = load_uploaded_docs()
-    for doc in uploaded:
-        if doc["id"] == doc_id:
-            doc["bookmarked"] = not doc.get("bookmarked", False)
-            save_uploaded_docs(uploaded)
-            return {"id": doc_id, "bookmarked": doc["bookmarked"]}
+    if supabase_client:
+        bookmarked = db_toggle_bookmark(doc_id)
+        if bookmarked is not None:
+            return {"id": doc_id, "bookmarked": bookmarked}
+    else:
+        uploaded = load_uploaded_docs()
+        for doc in uploaded:
+            if doc["id"] == doc_id:
+                doc["bookmarked"] = not doc.get("bookmarked", False)
+                save_uploaded_docs(uploaded)
+                return {"id": doc_id, "bookmarked": doc["bookmarked"]}
             
     raise HTTPException(status_code=404, detail="Document not found")
 
@@ -246,7 +343,6 @@ async def upload_document(
             except UnicodeDecodeError:
                 content = file_bytes.decode("latin-1")
         elif ext == ".docx":
-            # We need to save temporary or use BytesIO
             import io
             doc_file = io.BytesIO(file_bytes)
             doc_obj = docx.Document(doc_file)
@@ -267,35 +363,44 @@ async def upload_document(
     if not content.strip():
         raise HTTPException(status_code=400, detail="The file is empty or no readable text was extracted.")
         
-    # Standardize whitespace and line endings slightly but preserve paragraph structure
-    # For nice display, replace multiple consecutive newlines with a double newline, and normalize line endings
     content = content.replace("\r\n", "\n").replace("\r", "\n")
     
     doc_id = str(uuid.uuid4())
     doc_title = title or os.path.splitext(filename)[0]
     doc_author = author or "Unknown"
     
-    # Save the file physical copy in uploads folder
-    save_path = os.path.join(UPLOADS_DIR, f"{doc_id}{ext}")
-    with open(save_path, "wb") as f:
-        f.write(file_bytes)
+    # Pre-calculate character and word counts
+    char_cnt, word_cnt = get_doc_stats(content)
+    
+    # Save the physical file copy only if not using DB (or as backup)
+    save_path = None
+    if not supabase_client:
+        save_path = os.path.join(UPLOADS_DIR, f"{doc_id}{ext}")
+        with open(save_path, "wb") as f:
+            f.write(file_bytes)
         
-    # Add to index
-    uploaded = load_uploaded_docs()
     new_doc = {
         "id": doc_id,
         "title": doc_title,
         "author": doc_author,
         "type": "uploaded",
         "content": content,
+        "char_count": char_cnt,
+        "word_count": word_cnt,
         "bookmarked": False,
         "filename": filename,
         "path": save_path
     }
-    uploaded.append(new_doc)
-    save_uploaded_docs(uploaded)
     
-    char_cnt, word_cnt = get_doc_stats(content)
+    if supabase_client:
+        success = db_save_document(new_doc)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save document to the database.")
+    else:
+        uploaded = load_uploaded_docs()
+        uploaded.append(new_doc)
+        save_uploaded_docs(uploaded)
+        
     return {
         "id": doc_id,
         "title": doc_title,
@@ -308,22 +413,31 @@ async def upload_document(
 
 @app.delete("/api/documents/{doc_id}")
 def delete_document(doc_id: str):
-    # Can only delete uploaded documents
-    uploaded = load_uploaded_docs()
-    for i, doc in enumerate(uploaded):
-        if doc["id"] == doc_id:
-            # Delete physical file
-            path = doc.get("path")
+    if supabase_client:
+        row = db_delete_document(doc_id)
+        if row:
+            # Delete physical file if it exists
+            path = row.get("path")
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
                 except Exception:
                     pass
-            # Remove from index
-            uploaded.pop(i)
-            save_uploaded_docs(uploaded)
             return {"status": "success", "message": "Document deleted"}
-            
+    else:
+        uploaded = load_uploaded_docs()
+        for i, doc in enumerate(uploaded):
+            if doc["id"] == doc_id:
+                path = doc.get("path")
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                uploaded.pop(i)
+                save_uploaded_docs(uploaded)
+                return {"status": "success", "message": "Document deleted"}
+                
     raise HTTPException(status_code=404, detail="Uploaded document not found or cannot be deleted")
 
 # Serve Vue Frontend compiled files
