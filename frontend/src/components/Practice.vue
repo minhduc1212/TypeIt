@@ -128,7 +128,7 @@
         @keydown="handleSpecialKeys"
         @blur="isFocused = false"
         @focus="isFocused = true"
-        v-model="inputValue"
+        :value="inputValue"
         autocomplete="off"
         autocorrect="off"
         autocapitalize="off"
@@ -577,6 +577,9 @@ const fetchDocument = async () => {
       }))
       
       resetPracticeState()
+      nextTick(() => {
+        focusTyping()
+      })
     } else {
       console.error('Document not found')
       emit('back')
@@ -696,32 +699,40 @@ const focusTyping = () => {
   })
 }
 
-// Captures typing inputs including Vietnamese diacritics / IME composition
-const handleInput = (e) => {
-  if (showResults.value) return
+// Helper to strip diacritics and normalize characters for IME precursor matching (e.g. o -> ô -> ố)
+const getBaseChar = (char) => {
+  if (!char) return ''
+  return char
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+}
 
-  // Start timer on first keystroke
-  if (startTime.value === null) {
-    startTime.value = Date.now()
-    timerInterval.value = setInterval(() => {
-      elapsedSeconds.value++
-    }, 1000)
-  }
+let pendingDeletionTimeout = null
 
-  const typedText = inputValue.value
-  const typedLength = typedText.length
-  const newIndex = Math.min(typedLength, chars.value.length)
+// Processes the final state after resolving any potential simulated backspaces from IMEs
+const processInputState = (typedText, newIndex, isAdditionOrUpdate) => {
+  const oldIndex = currentIndex.value
   
-  const isAddition = newIndex > currentIndex.value
-  const isDeletion = newIndex < currentIndex.value
-
-  // Compare characters dynamically to allow IME replacements (like Telex "a" + "a" -> "â")
+  // Compare characters dynamically
   for (let i = 0; i < chars.value.length; i++) {
     if (i < newIndex) {
       const targetChar = chars.value[i].char
       const typedChar = typedText[i]
       
-      if (typedChar === targetChar) {
+      const isLastChar = i === newIndex - 1
+      
+      // If it's the last character (currently being typed/composed), we accept base character matches.
+      // Otherwise, we require an exact match.
+      let isCorrect = false
+      if (isLastChar) {
+        isCorrect = typedChar === targetChar || getBaseChar(typedChar) === getBaseChar(targetChar)
+      } else {
+        isCorrect = typedChar === targetChar
+      }
+      
+      if (isCorrect) {
         chars.value[i].status = 'correct'
       } else {
         chars.value[i].status = 'incorrect'
@@ -732,33 +743,33 @@ const handleInput = (e) => {
   }
 
   // Handle sounds and stats
-  if (isAddition) {
-    typedCharCount.value++
-    const newlyTypedChar = typedText[newIndex - 1]
-    const targetChar = chars.value[newIndex - 1].char
+  if (isAdditionOrUpdate) {
+    // Determine if it was a true addition or just an IME replacement update
+    const isNewKey = newIndex > oldIndex
     
-    if (newlyTypedChar === targetChar) {
-      playClickSound(true)
-    } else {
-      errorCount.value++
-      playClickSound(false)
+    if (isNewKey) {
+      typedCharCount.value++
     }
-  } else if (isDeletion) {
-    playClickSound(true) // Play click sound for backspace
-  } else {
-    // Character at index was replaced during IME composition update
+    
+    // Check correctness of the last character
     const replacedIdx = newIndex - 1
     if (replacedIdx >= 0) {
       const targetChar = chars.value[replacedIdx].char
       const typedChar = typedText[replacedIdx]
+      const isCorrect = typedChar === targetChar || getBaseChar(typedChar) === getBaseChar(targetChar)
       
-      if (typedChar === targetChar) {
+      if (isCorrect) {
         playClickSound(true)
       } else {
-        errorCount.value++
+        if (isNewKey) {
+          errorCount.value++
+        }
         playClickSound(false)
       }
     }
+  } else {
+    // This is a true manual backspace (the 30ms timeout fired)
+    playClickSound(true) // Play click sound for backspace
   }
 
   currentIndex.value = newIndex
@@ -770,6 +781,47 @@ const handleInput = (e) => {
       clearInterval(timerInterval.value)
     }
     showResults.value = true
+  }
+}
+
+// Captures typing inputs including Vietnamese diacritics / IME composition
+const handleInput = (e) => {
+  if (showResults.value) return
+
+  // Read raw value directly from the DOM to bypass Vue's composition lock
+  const typedText = e.target.value
+  inputValue.value = typedText
+
+  // Start timer on first keystroke
+  if (startTime.value === null) {
+    startTime.value = Date.now()
+    timerInterval.value = setInterval(() => {
+      elapsedSeconds.value++
+    }, 1000)
+  }
+
+  const typedLength = typedText.length
+  const newIndex = Math.min(typedLength, chars.value.length)
+  
+  const isAddition = newIndex > currentIndex.value
+  const isDeletion = newIndex < currentIndex.value
+
+  // Defer backspace processing to filter out simulated backspaces from third-party IMEs (Telex)
+  if (isDeletion) {
+    if (pendingDeletionTimeout) {
+      clearTimeout(pendingDeletionTimeout)
+    }
+    pendingDeletionTimeout = setTimeout(() => {
+      processInputState(typedText, newIndex, false)
+      pendingDeletionTimeout = null
+    }, 30) // 30ms is enough to catch simulated key sequences from IMEs (like UniKey or EVKey)
+  } else {
+    // If it's an addition or update, cancel any pending deletion and process immediately
+    if (pendingDeletionTimeout) {
+      clearTimeout(pendingDeletionTimeout)
+      pendingDeletionTimeout = null
+    }
+    processInputState(typedText, newIndex, true)
   }
 }
 
