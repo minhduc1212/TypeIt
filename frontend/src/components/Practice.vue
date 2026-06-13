@@ -548,9 +548,8 @@ const getCharClass = (charObj, idx) => {
 }
 
 const getDisplayChar = (char) => {
-  // If character is a newline, we want to render the carriage return and the newline itself
   if (char === '\n') {
-    return '↵\n'
+    return '\n'
   }
   return char
 }
@@ -1259,19 +1258,8 @@ watch(() => props.docId, () => {
 
 /* Carriage return symbol style */
 .char-nl {
-  display: inline-block;
-  width: 0;
-  overflow: visible;
-  color: var(--ui-muted);
-  font-size: 0.85em;
-  opacity: 0.5;
+  display: inline;
   pointer-events: none;
-}
-
-.char-nl::before {
-  content: "↵";
-  position: absolute;
-  bottom: 0;
 }
 
 .char-space {
