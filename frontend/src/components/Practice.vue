@@ -139,7 +139,7 @@
            :style="wrapperStyle"
            ref="scrollContainer">
         <!-- We prompt focus if the user loses it -->
-        <div class="focus-overlay" v-if="!isFocused && !showResults" @click="focusTyping">
+        <div class="focus-overlay" v-if="!isFocused && !showResults" @click.stop="focusTyping">
           <div class="focus-prompt">Click here to resume typing</div>
         </div>
 
@@ -289,6 +289,12 @@ watch(enableErrorSound, (newVal) => {
 
 watch(selectedSoundProfile, (newVal) => {
   localStorage.setItem('typeit_sound_profile', newVal)
+})
+
+watch(showSettings, (newVal) => {
+  if (!newVal) {
+    focusTyping()
+  }
 })
 
 const changeSoundProfile = (value) => {
@@ -912,6 +918,12 @@ onMounted(() => {
 })
 
 const handleGlobalClick = (e) => {
+  // If the target element is no longer in the DOM (e.g. it was unmounted/removed on click),
+  // do not treat it as an outside click.
+  if (!window.document.body.contains(e.target)) {
+    return
+  }
+
   const zone = window.document.querySelector('.typing-zone')
   const settings = window.document.querySelector('.settings-dropdown')
   const header = window.document.querySelector('.practice-header')
