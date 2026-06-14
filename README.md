@@ -95,3 +95,21 @@ To modify the codebase, you can run the backend and frontend dev servers concurr
    npm run dev
    ```
    The Vite dev server will start on port 5173. Requests to `/api/*` are automatically proxied to the backend server on port 8000 (configured in `vite.config.js`). Access the live reloads at `http://localhost:5173/`.
+
+---
+
+## 💾 Database & Storage Modes
+
+The application supports two storage modes depending on the environment variables defined in the `.env` file at the root:
+
+### 1. Supabase Database Mode
+When `SUPABASE_URL` and `SUPABASE_KEY` are provided in `.env`:
+* **Storage**: Document metadata and parsed content are saved in the remote Supabase database (`uploaded_documents` table).
+* **Local `./data` Folder**: Local files in the `./data` directory (such as `uploaded_docs.json` or `./data/uploads/`) **are not used** and changing them will have no effect on the application.
+
+### 2. Local Storage Mode (Fallback)
+When Supabase environment variables are missing or incorrect:
+* **Storage**: Uploaded physical documents are saved locally in `./data/uploads/`.
+* **Index**: Metadata and contents are appended to `./data/uploaded_docs.json`.
+* **Local `./data` Folder**: Pushing or modifying `./data/uploaded_docs.json` will directly update the list of documents available in the application.
+

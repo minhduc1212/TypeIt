@@ -24,4 +24,6 @@
     https://10fastfingers.com/
 
 # TODO
-    add cache
+    [x] add cache
+    [ ] typing page: load a whole file is so lag -> divide it, load part each part
+    [ ] save the part to cintinue to type (new mode)
