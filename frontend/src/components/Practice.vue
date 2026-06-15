@@ -22,6 +22,15 @@
               </svg>
               <span>{{ document.bookmarked ? 'Bookmarked' : 'Bookmark' }}</span>
             </button>
+            <span class="dot" v-if="parts.length > 1">•</span>
+            <div class="part-selector" v-if="parts.length > 1">
+              <span class="part-label">Part:</span>
+              <select v-model.number="currentPartIndex" @change="changePart" class="part-select">
+                <option v-for="(part, idx) in parts" :key="idx" :value="idx">
+                  {{ idx + 1 }} / {{ parts.length }}
+                </option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -159,8 +168,11 @@
     <!-- Results Modal (Popup) -->
     <div class="modal-backdrop" v-if="showResults">
       <div class="results-modal">
-        <h2>Practice Results</h2>
-        <p class="doc-title-result">« {{ document.title }} »</p>
+        <h2>{{ isLastPart ? 'Practice Completed!' : 'Part ' + (currentPartIndex + 1) + ' Completed!' }}</h2>
+        <p class="doc-title-result">
+          « {{ document.title }} »
+          <span v-if="parts.length > 1"> (Part {{ currentPartIndex + 1 }} of {{ parts.length }})</span>
+        </p>
 
         <div class="results-grid">
           <div class="result-card">
@@ -188,7 +200,9 @@
         </div>
 
         <div class="modal-actions">
-          <button class="btn btn-primary" @click="restartPractice">Restart Document</button>
+          <button v-if="!isLastPart" class="btn btn-primary" @click="goToNextPart">Next Part</button>
+          <button v-else class="btn btn-primary" @click="restartWholeDocument">Restart Document</button>
+          <button v-if="parts.length > 1" class="btn btn-secondary" @click="restartPractice">Restart Part</button>
           <button class="btn btn-secondary" @click="goBack">Choose Another</button>
         </div>
       </div>
@@ -212,10 +226,16 @@ const props = defineProps({
 const emit = defineEmits(['back'])
 
 const document = ref(null)
+const parts = ref([])
+const currentPartIndex = ref(0)
 const chars = ref([])
 const currentIndex = ref(0)
 const startTime = ref(null)
 const elapsedSeconds = ref(0)
+
+const isLastPart = computed(() => {
+  return currentPartIndex.value === parts.value.length - 1
+})
 const timerInterval = ref(null)
 const typedCharCount = ref(0)
 const errorCount = ref(0)
@@ -603,40 +623,83 @@ const formatTime = (seconds) => {
   return `${m}:${s}`
 }
 
-// Fetch document on mount
-const fetchDocument = async () => {
-  try {
-    const res = await fetch(`/api/documents/${props.docId}`)
-    if (res.ok) {
-      const doc = await res.json()
-      document.value = doc
-      
-      // Parse characters
-      chars.value = doc.content.split('').map(c => ({
-        char: c,
-        status: 'untyped'
-      }))
-      
-      resetPracticeState()
-      nextTick(() => {
-        focusTyping()
-      })
-    } else {
-      console.error('Document not found')
-emit('back')
+// Smart text chunking helper
+const splitIntoParts = (text, chunkSize = 1200) => {
+  if (!text) return []
+  const chunks = []
+  let remaining = text
+
+  while (remaining.length > 0) {
+    if (remaining.length <= chunkSize) {
+      chunks.push(remaining)
+      break
     }
-  } catch (err) {
-    console.error('Error loading document:', err)
-    emit('back')
+
+    // Try to find a good split point around chunkSize
+    let splitIndex = chunkSize
+
+    // 1. Look for a paragraph break within [chunkSize - 300, chunkSize + 100]
+    const searchRangeStart = Math.max(chunkSize - 300, 100)
+    const searchRangeEnd = Math.min(chunkSize + 100, remaining.length)
+    const subText = remaining.substring(searchRangeStart, searchRangeEnd)
+
+    let pBreak = subText.lastIndexOf('\n\n')
+    if (pBreak !== -1) {
+      splitIndex = searchRangeStart + pBreak + 2
+    } else {
+      // 2. Look for a line break
+      let lBreak = subText.lastIndexOf('\n')
+      if (lBreak !== -1) {
+        splitIndex = searchRangeStart + lBreak + 1
+      } else {
+        // 3. Look for a word break (space)
+        let wBreak = subText.lastIndexOf(' ')
+        if (wBreak !== -1) {
+          splitIndex = searchRangeStart + wBreak + 1
+        }
+      }
+    }
+
+    chunks.push(remaining.substring(0, splitIndex))
+    remaining = remaining.substring(splitIndex)
+  }
+
+  return chunks
+}
+
+const saveProgress = () => {
+  if (document.value) {
+    localStorage.setItem(`typeit_progress_${document.value.id}`, String(currentPartIndex.value))
   }
 }
 
-const resetPracticeState = () => {
+const loadProgress = () => {
+  if (document.value) {
+    const saved = localStorage.getItem(`typeit_progress_${document.value.id}`)
+    if (saved !== null) {
+      const parsed = parseInt(saved, 10)
+      if (parsed >= 0 && parsed < parts.value.length) {
+        currentPartIndex.value = parsed
+        return
+      }
+    }
+  }
+  currentPartIndex.value = 0
+}
+
+const loadCurrentPart = () => {
+  if (parts.value.length === 0) return
+  const content = parts.value[currentPartIndex.value]
+  chars.value = content.split('').map(c => ({
+    char: c,
+    status: 'untyped'
+  }))
+
   if (timerInterval.value) {
     clearInterval(timerInterval.value)
     timerInterval.value = null
   }
-  
+
   currentIndex.value = 0
   startTime.value = null
   elapsedSeconds.value = 0
@@ -647,9 +710,7 @@ const resetPracticeState = () => {
   inputValue.value = ''
   scrollTranslateY.value = 0
   lastLineOffsetTop.value = -1
-  
-  chars.value.forEach(c => c.status = 'untyped')
-  
+
   nextTick(() => {
     updateVisibleLines()
     nextTick(() => {
@@ -661,8 +722,58 @@ const resetPracticeState = () => {
   })
 }
 
+// Fetch document on mount
+const fetchDocument = async () => {
+  try {
+    const res = await fetch(`/api/documents/${props.docId}`)
+    if (res.ok) {
+      const doc = await res.json()
+      document.value = doc
+      
+      // Divide the document into parts
+      parts.value = splitIntoParts(doc.content, 1200)
+      
+      // Load saved part index and load that part
+      loadProgress()
+      loadCurrentPart()
+    } else {
+      console.error('Document not found')
+      emit('back')
+    }
+  } catch (err) {
+    console.error('Error loading document:', err)
+    emit('back')
+  }
+}
+
+const resetPracticeState = () => {
+  loadCurrentPart()
+}
+
 const restartPractice = () => {
   resetPracticeState()
+  focusTyping()
+}
+
+const goToNextPart = () => {
+  if (currentPartIndex.value < parts.value.length - 1) {
+    currentPartIndex.value++
+    saveProgress()
+    loadCurrentPart()
+    focusTyping()
+  }
+}
+
+const restartWholeDocument = () => {
+  currentPartIndex.value = 0
+  saveProgress()
+  loadCurrentPart()
+  focusTyping()
+}
+
+const changePart = () => {
+  saveProgress()
+  loadCurrentPart()
   focusTyping()
 }
 
@@ -702,8 +813,14 @@ const accuracy = computed(() => {
 })
 
 const progress = computed(() => {
-  if (chars.value.length === 0) return 0
-  return Math.round((currentIndex.value / chars.value.length) * 100)
+  if (!document.value || parts.value.length === 0) return 0
+  const totalChars = document.value.char_count || 1
+  let typedChars = 0
+  for (let i = 0; i < currentPartIndex.value; i++) {
+    typedChars += parts.value[i].length
+  }
+  typedChars += currentIndex.value
+  return Math.round((typedChars / totalChars) * 100)
 })
 
 // Keep the active typing line vertically centered in the container.
@@ -1099,6 +1216,44 @@ watch(() => props.docId, () => {
 
 .bookmark-btn:hover {
   background-color: #F8FAFC;
+}
+
+/* Part Selector Styles */
+.part-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.part-label {
+  font-size: 0.7rem;
+  color: var(--ui-muted);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.part-select {
+  padding: 3px 10px;
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ui-primary);
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  background-color: #FFFFFF;
+  cursor: pointer;
+  transition: all 0.15s;
+  outline: none;
+}
+
+.part-select:hover {
+  background-color: #F8FAFC;
+  border-color: var(--ui-primary);
+}
+
+.part-select:focus {
+  border-color: var(--ui-primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
 }
 
 /* Live Stats */

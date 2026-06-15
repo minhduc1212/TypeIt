@@ -25,5 +25,6 @@
 
 # TODO
     [x] add cache
-    [ ] typing page: load a whole file is so lag -> divide it, load part each part
-    [ ] save the part to cintinue to type (new mode)
+    [x] typing page: load a whole file is so lag -> divide it, load part each part
+    [ ] edit the text that loaded from the file
+    [ ] save the part to continue to type (new mode)
