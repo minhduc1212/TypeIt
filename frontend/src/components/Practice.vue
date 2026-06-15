@@ -57,6 +57,12 @@
         </div>
 
         <div class="nav-actions">
+          <button class="nav-action-btn" @click="openEditModal" title="Edit Document Text">
+            <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </button>
           <button class="nav-action-btn" @click="restartPractice" title="Restart">
             <svg class="icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
               <path d="M23 4v6h-6"></path>
@@ -165,6 +171,32 @@
       </div>
     </div>
 
+    <!-- Edit Text Modal (Popup) -->
+    <div class="modal-backdrop" v-if="showEditModal">
+      <div class="edit-modal">
+        <h2>Edit Document Text</h2>
+        <p class="edit-subtitle">Edit the content below to remove unwanted parts or correct errors.</p>
+        
+        <div class="edit-form-group">
+          <textarea v-model="editText" class="edit-textarea" placeholder="Type or paste document content here..."></textarea>
+        </div>
+
+        <div class="edit-stats-row">
+          <span>Words: {{ editWordCount }}</span>
+          <span>Characters: {{ editCharCount }}</span>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn btn-primary" @click="saveEditedText" :disabled="isSavingEdit">
+            {{ isSavingEdit ? 'Saving...' : 'Save Changes' }}
+          </button>
+          <button class="btn btn-secondary" @click="closeEditModal" :disabled="isSavingEdit">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Results Modal (Popup) -->
     <div class="modal-backdrop" v-if="showResults">
       <div class="results-modal">
@@ -235,6 +267,19 @@ const elapsedSeconds = ref(0)
 
 const isLastPart = computed(() => {
   return currentPartIndex.value === parts.value.length - 1
+})
+
+const showEditModal = ref(false)
+const editText = ref('')
+const isSavingEdit = ref(false)
+
+const editCharCount = computed(() => {
+  return editText.value.length
+})
+
+const editWordCount = computed(() => {
+  if (!editText.value || editText.value.trim() === '') return 0
+  return editText.value.trim().split(/\s+/).length
 })
 const timerInterval = ref(null)
 const typedCharCount = ref(0)
@@ -777,6 +822,64 @@ const changePart = () => {
   focusTyping()
 }
 
+const openEditModal = () => {
+  if (document.value) {
+    editText.value = document.value.content
+    showEditModal.value = true
+    if (timerInterval.value) {
+      clearInterval(timerInterval.value)
+      timerInterval.value = null
+    }
+  }
+}
+
+const closeEditModal = () => {
+  showEditModal.value = false
+  editText.value = ''
+  focusTyping()
+}
+
+const saveEditedText = async () => {
+  if (!document.value) return
+  isSavingEdit.value = true
+  try {
+    const res = await fetch(`/api/documents/${document.value.id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content: editText.value })
+    })
+
+    if (res.ok) {
+      // Update local document
+      document.value.content = editText.value
+      document.value.char_count = editCharCount.value
+      document.value.word_count = editWordCount.value
+
+      // Re-split content
+      parts.value = splitIntoParts(editText.value, 1200)
+
+      // Clamp currentPartIndex within bounds
+      if (currentPartIndex.value >= parts.value.length) {
+        currentPartIndex.value = Math.max(0, parts.value.length - 1)
+      }
+      
+      saveProgress()
+      loadCurrentPart()
+      showEditModal.value = false
+    } else {
+      alert('Failed to save changes.')
+    }
+  } catch (err) {
+    console.error('Error saving edited text:', err)
+    alert('An error occurred while saving.')
+  } finally {
+    isSavingEdit.value = false
+    focusTyping()
+  }
+}
+
 const goBack = () => {
   cleanup()
   emit('back')
@@ -1003,7 +1106,7 @@ const handleSpecialKeys = (e) => {
 }
 
 const handleGlobalKeydown = (e) => {
-  if (showResults.value || showSettings.value) return
+  if (showResults.value || showSettings.value || showEditModal.value) return
 
   const activeEl = window.document.activeElement
   if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
@@ -1035,6 +1138,7 @@ onMounted(() => {
 })
 
 const handleGlobalClick = (e) => {
+  if (showEditModal.value) return
   // If the target element is no longer in the DOM (e.g. it was unmounted/removed on click),
   // do not treat it as an outside click.
   if (!window.document.body.contains(e.target)) {
@@ -1626,6 +1730,71 @@ watch(() => props.docId, () => {
 
 .btn-secondary:hover {
   background-color: var(--bg-color);
+}
+
+/* Edit Text Modal Styles */
+.edit-modal {
+  background-color: #FFFFFF;
+  border-radius: 8px;
+  padding: 30px;
+  width: 100%;
+  max-width: 800px;
+  border: 1px solid var(--ui-border);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+}
+
+.edit-modal h2 {
+  font-family: var(--font-typing);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-correct);
+  margin: 0;
+}
+
+.edit-subtitle {
+  font-size: 0.85rem;
+  color: var(--ui-muted);
+  margin: -8px 0 0 0;
+}
+
+.edit-form-group {
+  width: 100%;
+}
+
+.edit-textarea {
+  width: 100%;
+  height: 350px;
+  padding: 14px;
+  font-family: var(--font-typing);
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text-correct);
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background-color: #F8FAFC;
+  resize: vertical;
+  outline: none;
+  transition: all 0.2s;
+  box-sizing: border-box;
+}
+
+.edit-textarea:focus {
+  border-color: var(--ui-primary);
+  background-color: #FFFFFF;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08);
+}
+
+.edit-stats-row {
+  display: flex;
+  gap: 20px;
+  font-size: 0.85rem;
+  color: var(--ui-primary);
+  font-weight: 500;
+  border-top: 1px solid var(--ui-border);
+  padding-top: 12px;
 }
 
 .loading-state {

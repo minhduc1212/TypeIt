@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
+from pydantic import BaseModel
 from supabase import create_client, Client
 
 # Supabase Client SDK setup
@@ -410,6 +411,48 @@ async def upload_document(
         "word_count": word_cnt,
         "bookmarked": False
     }
+
+class DocumentUpdatePayload(BaseModel):
+    content: str
+
+@app.put("/api/documents/{doc_id}")
+def update_document(doc_id: str, payload: DocumentUpdatePayload):
+    new_content = payload.content
+    
+    # Check default docs first
+    for doc in DEFAULT_DOCUMENTS:
+        if doc["id"] == doc_id:
+            doc["content"] = new_content
+            return {"status": "success", "message": "Default document content updated in memory"}
+            
+    # Check uploaded docs
+    if supabase_client:
+        try:
+            char_cnt, word_cnt = get_doc_stats(new_content)
+            response = supabase_client.table("uploaded_documents") \
+                .update({
+                    "content": new_content,
+                    "char_count": char_cnt,
+                    "word_count": word_cnt
+                }) \
+                .eq("id", doc_id) \
+                .execute()
+            if response.data:
+                return {"status": "success", "message": "Document updated"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
+    else:
+        uploaded = load_uploaded_docs()
+        for doc in uploaded:
+            if doc["id"] == doc_id:
+                char_cnt, word_cnt = get_doc_stats(new_content)
+                doc["content"] = new_content
+                doc["char_count"] = char_cnt
+                doc["word_count"] = word_cnt
+                save_uploaded_docs(uploaded)
+                return {"status": "success", "message": "Document updated"}
+                
+    raise HTTPException(status_code=404, detail="Document not found")
 
 @app.delete("/api/documents/{doc_id}")
 def delete_document(doc_id: str):

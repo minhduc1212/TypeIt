@@ -26,5 +26,6 @@
 # TODO
     [x] add cache
     [x] typing page: load a whole file is so lag -> divide it, load part each part
-    [ ] edit the text that loaded from the file
+    [x] edit the text that loaded from the file
+    [ ] the text that diff in the font -> error: ex: ’ but when type ' -> error 
     [ ] save the part to continue to type (new mode)
